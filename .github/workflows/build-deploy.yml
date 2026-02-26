@@ -1,4 +1,4 @@
-name: Build and Deploy Play.Inventory.NET Service Container to Azure Kubernetes Service
+name: Build and Deploy Play.Trading.NET Service Container to Azure Kubernetes Service
 
 on:
   push:
@@ -7,8 +7,8 @@ on:
 
 env:
   ACR_NAME: playeconomyapp
-  IMAGE_NAME: play-inventory
-  CONTAINER_APP_NAME: play-inventory
+  IMAGE_NAME: play-trading
+  CONTAINER_APP_NAME: play-trading
   RESOURCE_GROUP: play-rg
   AZURE_REGION: eastus
   AKS_CLUSTER: playrg-kube-cluster-ca
