@@ -43,8 +43,11 @@ Log.Logger = new LoggerConfiguration()
 
 // Add services to the container.
 
-builder.Services.Configure<MongoDbSettings>(
-    builder.Configuration.GetSection(nameof(MongoDbSettings)));
+builder.Services.Configure<CosmosDbSettings>(
+    builder.Configuration.GetSection(nameof(CosmosDbSettings)));
+
+builder.Services.Configure<ServiceBusSettings>(
+    builder.Configuration.GetSection(nameof(ServiceBusSettings)));
 
 builder.Services.Configure<ServiceSettings>(
     builder.Configuration.GetSection(nameof(ServiceSettings)));
@@ -67,10 +70,10 @@ builder.Services.AddSingleton<ITradingUserRepository>(sp =>
 builder.Services.AddSingleton<TradingCatalogSyncService>();
 builder.Services.AddSingleton<TradingInventorySyncService>();
 
-builder.Services.AddMongoDb()
-                .AddMongoRepository<CatalogItem>("catalogitems")
-                .AddMongoRepository<InventoryItem>("inventoryitems")
-                .AddMongoRepository<ApplicationUser>("users")
+builder.Services.AddCosmosDb()
+                .AddCosmosRepository<CatalogItem>("catalogitems")
+                .AddCosmosRepository<InventoryItem>("inventoryitems")
+                .AddCosmosRepository<ApplicationUser>("users")
                 .AddJwtBearerAuthentication();
 
 AddMassTransit();
