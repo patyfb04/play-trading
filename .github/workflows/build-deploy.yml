@@ -1,0 +1,61 @@
+name: Build and Deploy Play.Inventory.NET Service Container to Azure Kubernetes Service
+
+on:
+  push:
+    branches:
+      - master
+
+env:
+  ACR_NAME: playeconomyapp
+  IMAGE_NAME: play-inventory
+  CONTAINER_APP_NAME: play-inventory
+  RESOURCE_GROUP: play-rg
+  AZURE_REGION: eastus
+  AKS_CLUSTER: playrg-kube-cluster-ca
+  K8S_MANIFEST_PATH: k8s
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build and Push Docker Image to ACR
+        run: |
+          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
+
+          az acr build \
+            --registry $ACR_NAME \
+            --image $IMAGE_NAME:v2 \
+            --image $IMAGE_NAME:$IMAGE_TAG \
+            --build-arg GITHUB_TOKEN=${{ secrets.PAT_GITHUB_TOKEN }} \
+            .
+
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group $RESOURCE_GROUP \
+            --name $AKS_CLUSTER \
+            --overwrite-existing
+
+      - name: Create Kubernetes secret for Cosmos DB
+        run: |
+          kubectl create secret generic cosmosdb-connection \
+            --from-literal=CosmosDbSettings__ConnectionString="${{ secrets.COSMOS_CONNECTION_STRING }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Update image tag in Kubernetes manifests
+        run: |
+          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
+          sed -i "s|IMAGE_TAG_PLACEHOLDER|$IMAGE_TAG|g" $K8S_MANIFEST_PATH/deployment.yaml
+
+      - name: Deploy to AKS
+        run: |
+          kubectl apply -f $K8S_MANIFEST_PATH
