@@ -1,6 +1,8 @@
 using MassTransit;
+using MassTransit.EntityFrameworkCoreIntegration;
 //using MassTransit.MongoDbIntegration.Saga;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -16,20 +18,20 @@ using Play.Trading.Service.Clients;
 using Play.Trading.Service.Contracts;
 using Play.Trading.Service.Entities;
 using Play.Trading.Service.Exceptions;
+using Play.Trading.Service.Persistence;
 using Play.Trading.Service.Repository;
 using Play.Trading.Service.Services;
 using Play.Trading.Service.Settings;
 using Play.Trading.Service.SignalR;
 using Play.Trading.Service.StatesMachine;
+using Polly;
+using Polly.Timeout;
 using Serilog;
 using System.Reflection;
 using System.Text.Json.Serialization;
-using Polly;
-using Polly.Timeout;
 
 var builder = WebApplication.CreateBuilder(args);
 
-BsonDefaults.GuidRepresentationMode = GuidRepresentationMode.V3;
 BsonSerializer.RegisterSerializer(typeof(Guid), new GuidSerializer(GuidRepresentation.Standard));
 BsonSerializer.RegisterSerializer(typeof(Guid?), new NullableSerializer<Guid>(new GuidSerializer(GuidRepresentation.Standard)));
 
@@ -58,6 +60,9 @@ builder.Services.Configure<MassTransitSettings>(
 builder.Services.Configure<QueueSettings>(
     builder.Configuration.GetSection(nameof(QueueSettings)));
 
+builder.Services.Configure<SqlDbSettings>(
+    builder.Configuration.GetSection(nameof(SqlDbSettings)));
+
 builder.Services.AddSingleton<ITradingUserRepository>(sp =>
 {
     var client = sp.GetRequiredService<MongoClient>();
@@ -75,6 +80,13 @@ builder.Services.AddCosmosDb()
                 .AddCosmosRepository<InventoryItem>("inventoryitems")
                 .AddCosmosRepository<ApplicationUser>("users")
                 .AddJwtBearerAuthentication();
+
+builder.Services.AddDbContext<PurchaseStateDbContext>(options =>
+{
+    var sql = builder.Configuration.GetSection(nameof(SqlDbSettings)).Get<SqlDbSettings>();
+    options.UseSqlServer(sql.ConnectionString);
+
+});
 
 AddMassTransit();
 
@@ -127,18 +139,6 @@ builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
-// Sync the services items with trading items on startup
-// using (var scope = app.Services.CreateScope())
-// {
-//     var syncCatalog = scope.ServiceProvider.GetRequiredService<TradingCatalogSyncService>();
-//     await syncCatalog.RunAsync();
-// }
-
-// using (var scope = app.Services.CreateScope())
-// {
-//     var syncInventory = scope.ServiceProvider.GetRequiredService<TradingInventorySyncService>();
-//     await syncInventory.RunAsync();
-// }
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -177,79 +177,32 @@ void AddMassTransit()
 {
     builder.Services.AddMassTransit(configure =>
     {
-        configure.AddConsumers(Assembly.GetEntryAssembly()); // all consumers found in the entry assembly are register with mass transit
+        configure.AddConsumers(Assembly.GetEntryAssembly());
 
         configure.AddSagaStateMachine<PurchaseStateMachine, PurchaseState>()
-        .InMemoryRepository();
-        //.MongoDbRepository(repo => {
-        //    var serviceSettings = builder.Configuration.GetSection(nameof(ServiceSettings)).Get<ServiceSettings>();
-        //    var mongoSettings = builder.Configuration.GetSection(nameof(MongoDbSettings)).Get<MongoDbSettings>();
+           .EntityFrameworkRepository(r =>
+           {
+               r.ExistingDbContext<PurchaseStateDbContext>();
+               r.LockStatementProvider = new SqlServerLockStatementProvider();
 
-        //    repo.Connection = mongoSettings.ConnectionString;
-        //    repo.DatabaseName = serviceSettings.ServiceName;
-        //    repo.CollectionName = "purchaseStates";
+           });
 
-        //});
-
-        var queueSettings = builder.Configuration.GetSection(nameof(QueueSettings)).Get<QueueSettings>();
-
-        configure.UsingRabbitMq((context, cfg) =>
+        configure.UsingAzureServiceBus((context, cfg) =>
         {
-            var rabbitSettings = builder.Configuration.GetSection(nameof(RabbitMQSettings)).Get<RabbitMQSettings>();
-            
+            var sb = builder.Configuration.GetSection(nameof(ServiceBusSettings)).Get<ServiceBusSettings>();
+
+            cfg.Host(sb.FullyQualifiedNamespace);
+
             cfg.UseInMemoryOutbox(context);
 
-            cfg.UseMessageRetry(config =>
+            cfg.UseMessageRetry(r =>
             {
-                config.Interval(3, TimeSpan.FromSeconds(5));
-                config.Ignore(typeof(UnknownItemException));
-            });
-
-            cfg.Host(rabbitSettings.Host, h =>
-            {
-                h.Username(rabbitSettings.Username);
-                h.Password(rabbitSettings.Password);
-            });
-
-
-            cfg.ReceiveEndpoint("purchase-requested-faults", e =>
-            {
-                e.Handler<Fault<PurchaseRequested>>(context =>
-                {
-                    var exception = context.Message.Exceptions.FirstOrDefault();
-                    Console.WriteLine($"Fault captured: {exception?.Message}");
-                    return Task.CompletedTask;
-                });
-
-                e.Handler<Fault<GilDebited>>(context =>
-                {
-                    var exception = context.Message.Exceptions.FirstOrDefault();
-                    Console.WriteLine($"Fault captured: {exception?.Message}");
-                    return Task.CompletedTask;
-                });
-
-                e.Handler<Fault<InventoryItemsGranted>>(context =>
-                {
-                    var exception = context.Message.Exceptions.FirstOrDefault();
-                    Console.WriteLine($"Fault captured: {exception?.Message}");
-                    return Task.CompletedTask;
-                });
-
-                e.Handler<Fault<InventoryItemsSubtracted>>(context =>
-                {
-                    var exception = context.Message.Exceptions.FirstOrDefault();
-                    Console.WriteLine($"Fault captured: {exception?.Message}");
-                    return Task.CompletedTask;
-                });
-
+                r.Interval(3, TimeSpan.FromSeconds(5));
+                r.Ignore(typeof(UnknownItemException));
             });
 
             cfg.ConfigureEndpoints(context);
         });
-
-        EndpointConvention.Map<GrantItems>(new Uri(queueSettings.GrantItemsQueueAddress));
-        EndpointConvention.Map<DebitGil>(new Uri(queueSettings.DebitGilQueueAddress));
-        EndpointConvention.Map<SubtractItems>(new Uri(queueSettings.SubtractItemsQueueAddress));
     });
 }
 
