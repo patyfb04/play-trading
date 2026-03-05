@@ -7,7 +7,7 @@ using Microsoft.OpenApi.Models;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
-using MongoDB.Driver;
+// MongoDB types are not required directly here; repositories are registered via Play.Common extensions
 using Play.Common.Identity;
 using Play.Common.Repositories;
 using Play.Common.Settings;
@@ -19,7 +19,6 @@ using Play.Trading.Service.Contracts;
 using Play.Trading.Service.Entities;
 using Play.Trading.Service.Exceptions;
 using Play.Trading.Service.Persistence;
-using Play.Trading.Service.Repository;
 using Play.Trading.Service.Services;
 using Play.Trading.Service.Settings;
 using Play.Trading.Service.SignalR;
@@ -63,12 +62,9 @@ builder.Services.Configure<QueueSettings>(
 builder.Services.Configure<SqlDbSettings>(
     builder.Configuration.GetSection(nameof(SqlDbSettings)));
 
-builder.Services.AddSingleton<ITradingUserRepository>(sp =>
-{
-    var client = sp.GetRequiredService<MongoClient>();
-    var database = client.GetDatabase("Identity");
-    return new TradingUserRepository(database, "Users");
-});
+// Register MongoDB infrastructure and repositories from Play.Common
+builder.Services.AddMongoDb()
+                .AddMongoRepository<ApplicationUser>("users", databaseName: "Identity");
 
 //datasync with other microservices to keep data consistent
 
